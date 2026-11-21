@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Einfacher Diät-Assistent</title>
+  <style>
+    * { box-sizing: border-box; font-family: sans-serif; }
+    body { margin: 0; padding: 20px; background: #f3f4f6; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 450px; background: white; padding: 24px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+    .hidden { display: none !important; }
+    label { display: block; font-weight: bold; margin-top: 14px; font-size: 14px; }
+    input, select { width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 16px; }
+    .btn { width: 100%; padding: 16px; margin-top: 20px; border: none; border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; background: #10b981; color: white; }
+    .camera-box { border: 2px dashed #10b981; border-radius: 16px; padding: 30px; text-align: center; margin-top: 20px; cursor: pointer; background: #ecfdf5; }
+    #preview { width: 100%; max-height: 260px; object-fit: cover; border-radius: 12px; margin-top: 15px; }
+    .result-card { margin-top: 20px; padding: 25px; border-radius: 16px; text-align: center; color: white; }
+    .bg-green { background: #10b981; }
+    .bg-yellow { background: #f59e0b; color: #111827; }
+    .bg-red { background: #ef4444; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1 style="text-align:center;">🍽️ Diät-Assistent</h1>
+
+  <div id="setup-screen">
+    <label>Geschlecht</label>
+    <select id="gender"><option value="m">Männlich</option><option value="w">Weiblich</option></select>
+    <label>Alter (Jahre)</label><input type="number" id="age" value="35">
+    <label>Größe (cm)</label><input type="number" id="height" value="178">
+    <label>Aktuelles Gewicht (kg)</label><input type="number" id="weight" value="90">
+    <label>Mahlzeiten pro Tag</label>
+    <select id="meals"><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option></select>
+    <label>Ollama IP</label><input type="text" id="ollama-ip" value="127.0.0.1">
+    <button id="save-btn" class="btn">Speichern & Starten</button>
+  </div>
+
+  <div id="main-screen" class="hidden">
+    <div style="background:#f9fafb; padding:10px; border-radius:10px; text-align:center;">
+      Budget: <strong id="budget-display">600</strong> <strong>kcal</strong>
+    </div>
+    <input type="file" id="camera-input" accept="image/*" class="hidden">
+    <div id="upload-box" class="camera-box">📸 <strong>Hier klicken & Essensfoto wählen</strong></div>
+    <img id="preview" class="hidden">
+    <div id="loader" class="hidden" style="text-align:center; margin-top:20px; font-weight:bold; color:#10b981;">⏳ KI prüft deinen Teller...</div>
+    <div id="result-box" class="result-card hidden">
+      <p id="res-food"></p>
+      <h2 id="res-text" style="font-size:28px; margin:10px 0;"></h2>
+      <p id="res-percent"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+  let userBudget = 600;
+  let ollamaIp = '127.0.0.1';
+
+  document.getElementById('save-btn').onclick = function() {
+    const g = document.getElementById('gender').value;
+    const a = parseFloat(document.getElementById('age').value) || 35;
+    const h = parseFloat(document.getElementById('height').value) || 178;
+    const w = parseFloat(document.getElementById('weight').value) || 90;
+    const m = parseInt(document.getElementById('meals').value) || 3;
+    ollamaIp = document.getElementById('ollama-ip').value.trim() || '127.0.0.1';
+
+    let bmr = (10 * w) + (6.25 * h) - (5 * a) + (g === 'm' ? 5 : -161);
+    userBudget = Math.round(Math.max(1200, (bmr * 1.35) - 500) / m);
+
+    document.getElementById('budget-display').innerText = userBudget;
+    document.getElementById('setup-screen').classList.add('hidden');
+    document.getElementById('main-screen').classList.remove('hidden');
+  };
+
+  document.getElementById('upload-box').onclick = function() {
+    document.getElementById('camera-input').click();
+  };
+
+  document.getElementById('camera-input').onchange = function(event) {
+    const file = event.target.files.item(0);
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1, 800 / img.width);
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const prev = document.getElementById('preview');
+        prev.src = dataUrl;
+        prev.classList.remove('hidden');
+        sendToOllama(dataUrl.split(',').pop());
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  async function sendToOllama(base64Image) {
+    document.getElementById('loader').classList.remove('hidden');
+    document.getElementById('result-box').classList.add('hidden');
+    const prompt = `Erlaubtes Budget: ${userBudget} kcal. Schätze die Kalorien auf dem Foto (inkl. 15% Fett-Puffer) und wie viel Prozent davon in das Budget passen (max 100%). Antworte NUR als JSON: {"gericht": "Name", "prozent": 50, "ansage": "Kurzer Satz ohne Zahlen"}`;
+
+    try {
+      const res = await fetch(`http://${ollamaIp}:11434/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'qwen3.5:4b',
+          messages: [{ role: 'user', content: prompt, images: [base64Image] }],
+          format: 'json',
+          think: false,
+          stream: false
+        })
+      });
+      const data = await res.json();
+      const result = JSON.parse(data.message.content);
+      const p = parseInt(result.prozent) || 50;
+
+      document.getElementById('res-food').innerText = "Erkannt: " + (result.gericht || "Mahlzeit");
+      document.getElementById('res-text').innerText = result.ansage || "Iss die Hälfte!";
+      document.getElementById('res-percent').innerText = `(ca. ${p} % der Portion)`;
+
+      const box = document.getElementById('result-box');
+      box.className = 'result-card ' + (p >= 85 ? 'bg-green' : (p >= 45 ? 'bg-yellow' : 'bg-red'));
+      box.classList.remove('hidden');
+    } catch (err) {
+      alert("Ollama-Fehler: " + err.message);
+    } finally {
+      document.getElementById('loader').classList.add('hidden');
+    }
+  }
+</script>
+</body>
+</html>
